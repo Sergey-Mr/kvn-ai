@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
@@ -8,6 +8,7 @@ import os
 import uvicorn
 from typing import List, Optional
 import torch
+import gc
 
 # Load environment variables
 load_dotenv()
@@ -15,17 +16,17 @@ model_name = os.getenv("MODEL_NAME")
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
 pinecone_index_name = os.getenv("PINECONE_INDEX_NAME")
 
-# Load embedding model
+# Load embedding model with explicit CPU setting
+print("Loading embedding model...")
 model = SentenceTransformer('./models/gte-small', device='cpu')
 
 # Initialize Pinecone
 pc = Pinecone(api_key=pinecone_api_key)
 index = pc.Index(pinecone_index_name)
 
-# Load Phi model and tokenizer
-phi_tokenizer = AutoTokenizer.from_pretrained('./models/phi')
-phi_model = AutoModelForCausalLM.from_pretrained('./models/phi', torch_dtype=torch.float32, device_map='auto')
-phi_model.eval()  # Set to evaluation mode
+# Clean up memory
+gc.collect()
+torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
 app = FastAPI()
 
@@ -101,39 +102,5 @@ def search_similar(request: SearchRequest):
         results=results
     )
 
-@app.post("/key_insights", response_model=ExtractionResponse)
-def extract_data(request: ExtractionRequest):
-    # Prepare prompt
-    prompt = f"""Analyze the following text and extract key insights. Text: {request.content}
-    Key insights:
-    """
-    
-    # Tokenize input
-    inputs = phi_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
-    inputs = inputs.to(phi_model.device)
-    
-    # Generate response
-    with torch.no_grad():
-        outputs = phi_model.generate(
-            **inputs,
-            max_length=1024,
-            num_return_sequences=1,
-            temperature=0.7,
-            do_sample=True,
-            pad_token_id=phi_tokenizer.pad_token_id
-        )
-    
-    # Decode response
-    response = phi_tokenizer.decode(outputs[0], skip_special_tokens=True)
-    
-    # Extract insights (split by newlines and remove empty lines)
-    insights = [line.strip() for line in response.split('\n') if line.strip()]
-    
-    # Format response
-    return ExtractionResponse(
-        key_insights=[ExtractedData(text=insight) for insight in insights]
-    )
-
-
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8085)

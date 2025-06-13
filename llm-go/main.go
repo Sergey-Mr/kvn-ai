@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	PhiModelName = "phi"
+	PhiModelName = "llama2:7b"
 	OllamaURL    = "http://localhost:11434/api/generate"
 )
 
@@ -91,6 +91,8 @@ func main() {
 			on the person's productivity, ability to accomplish tasks efficiently and plan the day correctly 
 			You are given a scientific paper and your goal is to extract key insights from the text. 
 			For each insight, provide a numerical ID and the insight text in the following format:
+			Extract key insights from the text. Format your response EXACTLY like this
+
 			1: [insight text]
 			2: [insight text]
 			3: [insight text]
@@ -101,25 +103,20 @@ func main() {
 			Model:       PhiModelName,
 			Prompt:      systemPrompt + req.Text,
 			Stream:      false,
-			Temperature: 0.7,
+			Temperature: 0.3,
 			TopP:        0.9,
 		}
 
-		reqJSON, _ := json.MarshalIndent(ollamaReq, "", "  ")
-		log.Printf("Sending request to LLM:\n%s", string(reqJSON))
-
-		insights, err := callOllama(ollamaReq)
+		rawResponse, err := callOllama(ollamaReq)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate insights: " + err.Error()})
 			return
 		}
 
-		parsedInsights := parseInsights(insights)
-		c.JSON(http.StatusOK, InsightResponse{
-			Insights: parsedInsights,
+		c.JSON(http.StatusOK, gin.H{
+			"raw_response": rawResponse,
+			"status":       "success",
 		})
-
-		fmt.Println(parsedInsights)
 	})
 
 	// Try the specified port first
@@ -141,36 +138,54 @@ func main() {
 
 func parseInsights(response string) []Insight {
 	var insights []Insight
-	lines := strings.Split(response, "\n")
 
-	for _, line := range lines {
+	// Add debugging
+	log.Printf("Raw AI response:\n%s", response)
+	log.Printf("Response length: %d", len(response))
+
+	lines := strings.Split(response, "\n")
+	log.Printf("Number of lines: %d", len(lines))
+
+	for i, line := range lines {
 		line = strings.TrimSpace(line)
+		log.Printf("Line %d: '%s'", i, line)
+
 		if line == "" {
 			continue
 		}
 
 		parts := strings.SplitN(line, ":", 2)
+		log.Printf("Parts for line %d: %v", i, parts)
+
 		if len(parts) != 2 {
+			log.Printf("Skipping line %d: doesn't have exactly 2 parts", i)
 			continue
 		}
 
 		id, err := strconv.Atoi(strings.TrimSpace(parts[0]))
 		if err != nil {
+			log.Printf("Skipping line %d: ID parsing error: %v", i, err)
 			continue
 		}
 
 		text := strings.TrimSpace(parts[1])
 		if text != "" {
-			insights = append(insights, Insight{
+			insight := Insight{
 				ID:   id,
 				Text: text,
-			})
+			}
+			log.Printf("Adding insight: %+v", insight)
+			insights = append(insights, insight)
 		}
 	}
+
+	log.Printf("Final insights count: %d", len(insights))
 	return insights
 }
 
 func pullModel() {
+	log.Printf("Pulling model: %s", PhiModelName)
+
 	reqBody := map[string]string{
 		"name": PhiModelName,
 	}
@@ -184,7 +199,7 @@ func pullModel() {
 	}
 	defer resp.Body.Close()
 
-	log.Println("Model phi2 is ready")
+	log.Println("Model is ready: " + PhiModelName)
 }
 
 func callOllama(req OllamaRequest) (string, error) {
